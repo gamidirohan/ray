@@ -14,6 +14,7 @@ from ray.data._internal.execution.interfaces import (
 from ray.data._internal.logging import configure_logging
 from ray.data._internal.random_config import RandomSeedConfig
 from ray.data._internal.stats_summary_actor import list_stats_summaries
+from ray.data.accumulator import Accumulator
 from ray.data.context import DataContext, DatasetContext
 from ray.data.dataset import (
     Dataset,
@@ -145,6 +146,7 @@ except ModuleNotFoundError:
 
 
 __all__ = [
+    "Accumulator",
     "ActorPoolStrategy",
     "BlockBasedFileDatasink",
     "ClickHouseTableSettings",

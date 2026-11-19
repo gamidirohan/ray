@@ -137,6 +137,11 @@ class TaskContext:
     # Additional keyword arguments passed to the task.
     kwargs: Dict[str, Any] = field(default_factory=dict)
 
+    # Per-task partial values of ``ray.data.Accumulator``s, keyed by accumulator id.
+    # Updated by ``Accumulator.add`` inside the UDF and cleared by ``_map_task``
+    # before each attempt.
+    accumulator_partials: Dict[str, Any] = field(default_factory=dict)
+
     @classmethod
     def get_current(cls) -> Optional["TaskContext"]:
         """Get the TaskContext for the current thread.

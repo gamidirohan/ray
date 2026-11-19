@@ -117,6 +117,22 @@ def yield_block_with_stats(
     yield pickle.dumps(build_metadata(block_ser_time_s))
 
 
+def _call_with_task_context(task_ctx, fn, *args, **kwargs):
+    """Call ``fn`` with ``task_ctx`` installed as the current ``TaskContext``.
+
+    ``TaskContext`` is thread-local. UDF code that runs on a helper thread (see
+    ``make_callable_class_single_threaded``) would otherwise not see the context of
+    the task it is serving, so things like ``Accumulator.add`` would fail there.
+    """
+    # Imported lazily to avoid a circular import at module load.
+    from ray.data._internal.execution.interfaces.task_context import TaskContext
+
+    if task_ctx is None:
+        return fn(*args, **kwargs)
+    with TaskContext.current(task_ctx):
+        return fn(*args, **kwargs)
+
+
 def make_callable_class_single_threaded(callable_cls: CallableClass) -> CallableClass:
     """Returns a thread-safe CallableClass with the same logic as the provided
     `callable_cls`.
@@ -138,20 +154,31 @@ def make_callable_class_single_threaded(callable_cls: CallableClass) -> Callable
             return super().__repr__()
 
         def __call__(self, *args, **kwargs):
+            # The UDF runs on the pool thread, so hand it this task's TaskContext.
+            from ray.data._internal.execution.interfaces.task_context import (
+                TaskContext,
+            )
+
+            task_ctx = TaskContext.get_current()
             # ThreadPoolExecutor will reuse the same thread for every submit call.
-            future = self.thread_pool_executor.submit(super().__call__, *args, **kwargs)
+            future = self.thread_pool_executor.submit(
+                _call_with_task_context, task_ctx, super().__call__, *args, **kwargs
+            )
             result = future.result()
             if not isinstance(result, GeneratorType):
                 return result
 
             def iterate():
+                # Generators run user code on every ``next``, so the context must
+                # be the one of the task consuming it now.
+                gen_ctx = TaskContext.get_current()
                 # Keep the lock across yields, but wait for it outside the executor.
                 with self._udf_lock:
                     try:
                         while True:
                             try:
                                 item = self.thread_pool_executor.submit(
-                                    next, result
+                                    _call_with_task_context, gen_ctx, next, result
                                 ).result()
                             except StopIteration:
                                 return

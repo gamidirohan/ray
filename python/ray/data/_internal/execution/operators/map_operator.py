@@ -93,6 +93,7 @@ from ray.data._internal.execution.util import (
 from ray.data._internal.logical.interfaces.partitioning import HashPartitioning
 from ray.data._internal.stats import StatsDict
 from ray.data._internal.util import MemoryProfiler, iterate_with_retry
+from ray.data.accumulator import AccumulatorStats, merge_accumulator_stats
 from ray.data.block import (
     Block,
     BlockAccessor,
@@ -792,6 +793,10 @@ class MapOperator(LineageReconstructionMixin, PhysicalOperator, ABC):
             if aborted:
                 self._metrics.on_task_aborted(task_index)
             else:
+                # Only successful tasks report stats, so failed or aborted tasks
+                # never contribute to accumulators.
+                if exception is None and task_exec_stats is not None:
+                    merge_accumulator_stats(task_exec_stats.custom_op_stats)
                 self._metrics.on_task_finished(
                     task_index, exception, task_exec_stats, task_exec_driver_stats
                 )
@@ -1043,6 +1048,9 @@ def _map_task(
             # can't leak into this one. A producing transform repopulates it
             # before the first block is yielded.
             op_stats_reporter.clear()
+            # Accumulator partials are attempt-scoped too: a rerun re-runs the UDF
+            # on all of the task's input, so it must start from zero.
+            ctx.accumulator_partials.clear()
             clock.drain()
             blocks_iter = (
                 _iter_sliced_blocks(blocks, slices) if slices else iter(blocks)
@@ -1085,6 +1093,16 @@ def _map_task(
                     # primarily interested in task total duration.
                     # TODO figure out a better way to track task total duration
                     task_dur_s = time.perf_counter() - task_start_s
+                    # Reported by producing transforms through the per-task
+                    # reporter; empty if the op reports nothing.
+                    custom_op_stats = op_stats_reporter.get_stats()
+                    if ctx.accumulator_partials:
+                        # Cumulative snapshot of this task's accumulator partials.
+                        # The driver only keeps the last block's snapshot per task.
+                        custom_op_stats = [
+                            *custom_op_stats,
+                            AccumulatorStats(dict(ctx.accumulator_partials)),
+                        ]
                     return BlockMetadataWithSchema.from_metadata(
                         replace(
                             block_meta,
@@ -1092,9 +1110,7 @@ def _map_task(
                             task_exec_stats=TaskExecWorkerStats(
                                 task_wall_time_s=task_dur_s,
                                 max_uss_bytes=profiler.estimate_max_uss(),
-                                # Reported by producing transforms through the
-                                # per-task reporter; empty if the op reports nothing.
-                                custom_op_stats=op_stats_reporter.get_stats(),
+                                custom_op_stats=custom_op_stats,
                             ),
                         ),
                         schema=block_schema if not yielded_schema else None,
