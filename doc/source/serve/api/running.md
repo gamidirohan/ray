@@ -21,6 +21,7 @@ These `ray.serve` functions start Serve on a Ray cluster, deploy and delete appl
 
    serve.start
    serve.run
+   serve.run_config
    serve.delete
    serve.status
    serve.shutdown

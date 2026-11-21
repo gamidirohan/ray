@@ -34,7 +34,7 @@ from ray.serve.context import (
 )
 from ray.serve.deployment import Application
 from ray.serve.exceptions import RayServeException
-from ray.serve.schema import LoggingConfig, TracingConfig
+from ray.serve.schema import LoggingConfig, ServeDeploySchema, TracingConfig
 
 logger = logging.getLogger(SERVE_LOGGER_NAME)
 
@@ -396,6 +396,31 @@ def serve_start(
     _set_global_client(client)
     logger.info(f'Started Serve in namespace "{SERVE_NAMESPACE}".')
     return client
+
+
+def serve_start_from_config(config: ServeDeploySchema) -> ServeControllerClient:
+    """Start Serve (or connect to a running instance) using a config's options.
+
+    Passes the config's ``proxy_location``, ``http_options``, ``grpc_options``,
+    ``controller_options`` and ``tracing_config`` to :func:`serve_start`. As with
+    any ``serve_start`` call, these only take effect if this call creates the
+    controller. ``serve run <config>`` and ``serve.run_config`` both call this
+    function, so they start Serve the same way.
+
+    Args:
+        config: The Serve config whose system-level options to use.
+
+    Returns:
+        A ``ServeControllerClient`` connected to the Serve controller.
+    """
+    return serve_start(
+        http_options=config.http_options.model_dump(),
+        proxy_location=config.proxy_location,
+        grpc_options=gRPCOptions(**config.grpc_options.model_dump()),
+        # Tracing can only be set at controller creation.
+        global_tracing_config=config.tracing_config,
+        controller_options=config.controller_options,
+    )
 
 
 def call_user_app_builder_with_args_if_necessary(

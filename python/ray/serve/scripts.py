@@ -533,28 +533,18 @@ def run(
             "need to call `ray.init` in your code when using `serve run`."
         )
 
-    http_options = {}
-    proxy_location = ProxyLocation.EveryNode
-    grpc_options = gRPCOptions()
-    controller_options = None
-    global_tracing_config = None
-    # Merge http_options, grpc_options, and controller_options with the ones on
-    # ServeDeploySchema.
-    if is_config and isinstance(config, ServeDeploySchema):
-        proxy_location = config.proxy_location
-        http_options = config.http_options.model_dump()
-        grpc_options = gRPCOptions(**config.grpc_options.model_dump())
-        controller_options = config.controller_options
-        # Tracing can only be set at controller creation.
-        global_tracing_config = config.tracing_config
-
-    client = _private_api.serve_start(
-        http_options=http_options,
-        proxy_location=proxy_location,
-        grpc_options=grpc_options,
-        global_tracing_config=global_tracing_config,
-        controller_options=controller_options,
-    )
+    if is_config:
+        # Start Serve with the http_options, grpc_options, controller_options and
+        # other system-level options from the ServeDeploySchema.
+        client = _private_api.serve_start_from_config(config)
+    else:
+        client = _private_api.serve_start(
+            http_options={},
+            proxy_location=ProxyLocation.EveryNode,
+            grpc_options=gRPCOptions(),
+            global_tracing_config=None,
+            controller_options=None,
+        )
 
     try:
         if is_config:

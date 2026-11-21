@@ -1,9 +1,11 @@
 import collections
 import inspect
 import logging
+import os
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Sequence, Type, Union, overload
 
+import yaml
 from attr import dataclass
 from fastapi import APIRouter, FastAPI
 from starlette.types import ASGIApp
@@ -68,6 +70,7 @@ from ray.serve.handle import DeploymentHandle
 from ray.serve.multiplex import _ModelMultiplexWrapper
 from ray.serve.schema import (
     LoggingConfig,
+    ServeDeploySchema,
     ServeInstanceDetails,
     ServeStatus,
     TracingConfig,
@@ -1116,6 +1119,89 @@ def run(
         wait_for_interrupt()
 
     return handle
+
+
+def _load_deploy_schema(
+    config: Union[str, "os.PathLike[str]", Dict[str, Any], ServeDeploySchema]
+) -> ServeDeploySchema:
+    """Turn a path, a dict or a ServeDeploySchema into a ServeDeploySchema."""
+    if isinstance(config, ServeDeploySchema):
+        return config
+
+    if isinstance(config, (str, os.PathLike)):
+        with open(config, "r") as config_file:
+            loaded = yaml.safe_load(config_file)
+        if not isinstance(loaded, dict):
+            raise ValueError(
+                f"The Serve config file '{config}' must contain a YAML mapping, "
+                f"got {type(loaded).__name__}."
+            )
+        return ServeDeploySchema.model_validate(loaded)
+
+    if isinstance(config, dict):
+        return ServeDeploySchema.model_validate(config)
+
+    raise TypeError(
+        "`config` must be a path to a Serve config file, a dict, or a "
+        f"ServeDeploySchema; got {type(config).__name__}."
+    )
+
+
+@PublicAPI(stability="alpha")
+def run_config(
+    config: Union[str, "os.PathLike[str]", Dict[str, Any], ServeDeploySchema],
+    *,
+    blocking: bool = False,
+) -> Dict[str, DeploymentHandle]:
+    """Deploy the applications in a Serve config and return handles to them.
+
+    This is the Python equivalent of ``serve run <config file>``. If Serve isn't
+    running yet, this function starts it with the config's ``proxy_location``,
+    ``http_options``, ``grpc_options``, ``controller_options`` and
+    ``tracing_config``. If Serve is already running, those options don't change.
+    Then it deploys the applications in the config and waits until every one of
+    them is running.
+
+    Unlike :func:`serve.run <ray.serve.run>`, this function deploys declaratively,
+    like ``serve deploy``. Serve deletes every application that an earlier
+    ``serve.run_config`` call or ``serve deploy`` deployed and that the new config
+    doesn't list. Serve doesn't delete applications that you started with
+    ``serve.run``. The deletion happens in the background, so a removed
+    application might still be shutting down when this function returns.
+
+    .. code-block:: python
+
+        from ray import serve
+
+        handles = serve.run_config("config/rayserve.yaml")
+        response = handles["my_app"].remote("input").result()
+
+    Args:
+        config: The Serve config to deploy. Pass the path to a YAML config file,
+            a dict with the same structure, or a
+            :class:`ServeDeploySchema <ray.serve.schema.ServeDeploySchema>`.
+        blocking: Whether this call should be blocking. If True, it
+            will loop and log status until Ctrl-C'd.
+
+    Returns:
+        Dict[str, DeploymentHandle]: A dict that maps the name of each
+            application in the config to a handle to its ingress deployment.
+
+    Raises:
+        RuntimeError: If an application fails to deploy.
+        FileNotFoundError: If ``config`` is a path that doesn't exist.
+        ValueError: If the config is invalid.
+        TypeError: If ``config`` isn't a path, a dict or a ``ServeDeploySchema``.
+    """
+    schema = _load_deploy_schema(config)
+
+    client = _private_api.serve_start_from_config(schema)
+    handles = client.deploy_config(schema)
+
+    if blocking:
+        wait_for_interrupt()
+
+    return handles
 
 
 @PublicAPI(stability="stable")

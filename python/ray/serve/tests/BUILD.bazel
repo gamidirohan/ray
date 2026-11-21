@@ -307,6 +307,7 @@ py_test_module_list(
         "test_cli_3.py",
         "test_cli_4.py",
         "test_consistent_hash_router.py",
+        "test_run_config.py",
     ],
     tags = [
         "exclusive",

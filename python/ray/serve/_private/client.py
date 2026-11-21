@@ -451,6 +451,56 @@ class ServeControllerClient:
                 expected_routing_config_version=expected_routing_config_version,
             )
 
+    @_ensure_connected
+    def deploy_config(self, config: ServeDeploySchema) -> Dict[str, DeploymentHandle]:
+        """Declaratively deploy a config, then wait for all its applications.
+
+        Applies ``config`` the way ``serve deploy`` does, so applications that an
+        earlier config deployed and ``config`` doesn't list are deleted. Then waits
+        until every application in ``config`` is RUNNING and the proxies serve it.
+
+        Args:
+            config: The config to deploy.
+
+        Returns:
+            A dict that maps each application name in ``config`` to a handle to
+            its ingress deployment, in the order of ``config.applications``.
+
+        Raises:
+            RuntimeError: If an application enters the DEPLOY_FAILED status.
+        """
+        ray.get(self._controller.apply_config.remote(config))
+
+        handles = {}
+        for app in config.applications:
+            self._wait_for_application_running(app.name)
+            ingress_deployment_name = ray.get(
+                self._controller.get_ingress_deployment_name.remote(app.name)
+            )
+            if ingress_deployment_name is None:
+                raise RuntimeError(
+                    f"Application '{app.name}' is RUNNING but has no ingress "
+                    "deployment."
+                )
+            handles[app.name] = self.get_handle(
+                ingress_deployment_name, app.name, check_exists=False
+            )
+
+        # Wait for the proxies to be serving before declaring the applications
+        # ready, so requests can be routed to them once this returns.
+        expected_routing_config_version = ray.get(
+            self._controller.get_routing_config_version.remote()
+        )
+        self.wait_for_proxies_serving(
+            wait_for_applications_running=True,
+            expected_routing_config_version=expected_routing_config_version,
+        )
+
+        for name in handles:
+            logger.info(f"Application '{name}' is ready.")
+
+        return handles
+
     def _check_ingress_deployments(
         self, built_apps: Sequence[BuiltApplication]
     ) -> None:
